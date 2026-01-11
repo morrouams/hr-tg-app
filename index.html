@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Recruiter CRM</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --tg-theme-bg-color: var(--tg-theme-bg-color, #F9FAFB);
+            --tg-theme-text-color: var(--tg-theme-text-color, #111827);
+            --tg-theme-hint-color: var(--tg-theme-hint-color, #6B7280);
+            --tg-theme-link-color: var(--tg-theme-link-color, #007AFF);
+            --tg-theme-button-color: var(--tg-theme-button-color, #007AFF);
+            --tg-theme-button-text-color: var(--tg-theme-button-text-color, #ffffff);
+            --tg-theme-secondary-bg-color: var(--tg-theme-secondary-bg-color, #F3F4F6);
+            --electric-blue: #007AFF;
+            --bg-light: #F9FAFB;
+            --bg-dark: #1F2937;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--tg-theme-bg-color);
+            color: var(--tg-theme-text-color);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            padding-bottom: env(safe-area-inset-bottom);
+            padding-top: env(safe-area-inset-top);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        .safe-area-top {
+            padding-top: env(safe-area-inset-top);
+        }
+
+        .safe-area-bottom {
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        .glass-header {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+
+        .glass-bottom {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .glass-header {
+                background: rgba(31, 41, 55, 0.8);
+            }
+            .glass-bottom {
+                background: rgba(31, 41, 55, 0.8);
+            }
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+        }
+
+        .category-badge {
+            background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+            color: #065F46;
+        }
+
+        .category-badge-blue {
+            background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
+            color: #1E40AF;
+        }
+
+        .category-badge-purple {
+            background: linear-gradient(135deg, #EDE9FE 0%, #DDD6FE 100%);
+            color: #5B21B6;
+        }
+
+        .category-badge-orange {
+            background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
+            color: #991B1B;
+        }
+
+        .category-badge-yellow {
+            background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+            color: #92400E;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // Инициализация Telegram Web App
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        const STORAGE_KEY = 'recruiter_db';
+        const USER_ID_KEY = 'telegram_user_id';
+
+        // Утилита для работы с CloudStorage
+        const storageUtils = {
+            async get() {
+                try {
+                    const result = await tg.CloudStorage.getItem(STORAGE_KEY);
+                    return result ? JSON.parse(result) : { candidates: [], userId: tg.initDataUnsafe?.user?.id || null };
+                } catch (error) {
+                    console.error('Error reading storage:', error);
+                    return { candidates: [], userId: tg.initDataUnsafe?.user?.id || null };
+                }
+            },
+
+            async set(data) {
+                try {
+                    await tg.CloudStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+                    return true;
+                } catch (error) {
+                    console.error('Error writing storage:', error);
+                    return false;
+                }
+            },
+
+            getCurrentUserId() {
+                return tg.initDataUnsafe?.user?.id || null;
+            }
+        };
+
+        // Компонент вкладок категорий (Segmented Control iOS стиль)
+        function CategoryTabs({ categories, activeCategory, onCategoryChange }) {
+            const activeIndex = categories.indexOf(activeCategory);
+            const segmentWidth = 100 / categories.length;
+            
+            return (
+                <div className="sticky top-0 z-10 glass-header border-b border-white/10">
+                    <div className="overflow-x-auto scrollbar-hide">
+                        <div className="relative flex gap-1 px-4 py-3 bg-[var(--tg-theme-secondary-bg-color)] rounded-2xl mx-4 my-2">
+                            {/* Подложка для активной вкладки */}
+                            <div 
+                                className="absolute top-1 bottom-1 bg-white rounded-xl shadow-sm transition-all duration-300 ease-out"
+                                style={{
+                                    width: `calc(${segmentWidth}% - 2px)`,
+                                    left: `calc(${activeIndex * segmentWidth}% + ${activeIndex * 4}px + 4px)`
+                                }}
+                            />
+                            {categories.map(cat => (
+                                <button
+                                    key={cat}
+                                    onClick={() => onCategoryChange(cat)}
+                                    className={`relative z-10 flex-1 px-3 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-all duration-300 ${
+                                        activeCategory === cat
+                                            ? 'text-[#007AFF]'
+                                            : 'text-[var(--tg-theme-hint-color)]'
+                                    }`}
+                                >
+                                    {cat}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Компонент карточки кандидата (Bento Grid стиль)
+        function CandidateCard({ candidate, onClick }) {
+            const lastComment = candidate.comments && candidate.comments.length > 0 
+                ? candidate.comments[candidate.comments.length - 1] 
+                : null;
+
+            // Получение цвета бейджа в зависимости от категории
+            const getCategoryBadgeClass = (category) => {
+                const cat = category.toLowerCase();
+                if (cat.includes('python') || cat.includes('backend')) return 'category-badge';
+                if (cat.includes('mobile') || cat.includes('ios') || cat.includes('android')) return 'category-badge-blue';
+                if (cat.includes('design') || cat.includes('ui')) return 'category-badge-purple';
+                if (cat.includes('frontend') || cat.includes('react')) return 'category-badge-orange';
+                return 'category-badge-yellow';
+            };
+
+            return (
+                <div
+                    onClick={onClick}
+                    className="bg-white border border-white/10 rounded-xl p-5 mb-3 cursor-pointer shadow-sm hover:shadow-md active:scale-[0.98] transition-all duration-300"
+                >
+                    <div className="flex items-start justify-between mb-3">
+                        <div className="flex-1">
+                            <h3 className="font-bold text-lg tracking-tight text-[var(--tg-theme-text-color)] mb-2">
+                                {candidate.name}
+                            </h3>
+                            <span className={`inline-block px-3 py-1.5 ${getCategoryBadgeClass(candidate.category)} text-xs font-semibold rounded-full`}>
+                                {candidate.category}
+                            </span>
+                        </div>
+                        {candidate.resumeUrl && (
+                            <span className="text-2xl ml-2">📎</span>
+                        )}
+                    </div>
+                    {lastComment && (
+                        <p className="text-sm text-slate-500 mt-3 line-clamp-2 leading-relaxed">
+                            {lastComment.text}
+                        </p>
+                    )}
+                    {candidate.tags && candidate.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3">
+                            {candidate.tags.map((tag, idx) => (
+                                <span key={idx} className="text-xs text-slate-400 font-medium">
+                                    #{tag}
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // Компонент детального вида кандидата
+        function CandidateDetail({ candidate, onClose, onUpdate, onDelete }) {
+            const [newComment, setNewComment] = useState('');
+            const [isEditing, setIsEditing] = useState(false);
+            const [editData, setEditData] = useState({
+                name: candidate.name,
+                category: candidate.category,
+                tags: candidate.tags?.join(', ') || ''
+            });
+
+            const handleAddComment = () => {
+                if (!newComment.trim()) return;
+                
+                const updatedCandidate = {
+                    ...candidate,
+                    comments: [
+                        ...(candidate.comments || []),
+                        {
+                            text: newComment,
+                            date: new Date().toISOString()
+                        }
+                    ]
+                };
+                onUpdate(updatedCandidate);
+                setNewComment('');
+            };
+
+            const handleSaveEdit = () => {
+                const updatedCandidate = {
+                    ...candidate,
+                    name: editData.name,
+                    category: editData.category,
+                    tags: editData.tags.split(',').map(t => t.trim()).filter(t => t)
+                };
+                onUpdate(updatedCandidate);
+                setIsEditing(false);
+            };
+
+            const handleDelete = () => {
+                if (window.confirm('Удалить кандидата?')) {
+                    onDelete(candidate.id);
+                    onClose();
+                }
+            };
+
+            const sortedComments = [...(candidate.comments || [])].reverse();
+
+            return (
+                <div className="fixed inset-0 bg-[#F9FAFB] z-50 flex flex-col safe-area-top safe-area-bottom">
+                    {/* Header */}
+                    <div className="glass-header flex items-center justify-between p-5 border-b border-white/10">
+                        <button
+                            onClick={onClose}
+                            className="text-[#007AFF] font-semibold text-base"
+                        >
+                            ← Назад
+                        </button>
+                        <h2 className="font-bold text-lg tracking-tight">{candidate.name}</h2>
+                        <button
+                            onClick={() => setIsEditing(!isEditing)}
+                            className="text-[#007AFF] font-semibold text-base"
+                        >
+                            {isEditing ? 'Отмена' : '✎'}
+                        </button>
+                    </div>
+
+                    {/* Content */}
+                    <div className="flex-1 overflow-y-auto p-4">
+                        {isEditing ? (
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Имя</label>
+                                    <input
+                                        type="text"
+                                        value={editData.name}
+                                        onChange={(e) => setEditData({...editData, name: e.target.value})}
+                                        className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Категория</label>
+                                    <input
+                                        type="text"
+                                        value={editData.category}
+                                        onChange={(e) => setEditData({...editData, category: e.target.value})}
+                                        className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Теги (через запятую)</label>
+                                    <input
+                                        type="text"
+                                        value={editData.tags}
+                                        onChange={(e) => setEditData({...editData, tags: e.target.value})}
+                                        className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                    />
+                                </div>
+                                <button
+                                    onClick={handleSaveEdit}
+                                    className="w-full py-4 rounded-xl bg-[#007AFF] text-white font-semibold hover:bg-[#0051D5] transition-all duration-300 active:scale-95 shadow-sm"
+                                >
+                                    Сохранить
+                                </button>
+                                <button
+                                    onClick={handleDelete}
+                                    className="w-full py-4 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600 transition-all duration-300 active:scale-95 shadow-sm"
+                                >
+                                    Удалить кандидата
+                                </button>
+                            </div>
+                        ) : (
+                            <>
+                                {/* Action buttons */}
+                                <div className="flex gap-3 mb-8">
+                                    {candidate.resumeUrl && (
+                                        <button
+                                            onClick={() => {
+                                                tg.openTelegramLink(candidate.resumeUrl);
+                                            }}
+                                            className="flex-1 py-4 rounded-xl bg-[#007AFF] text-white font-semibold hover:bg-[#0051D5] transition-all duration-300 active:scale-95 shadow-sm"
+                                        >
+                                            📎 Резюме
+                                        </button>
+                                    )}
+                                    {candidate.chatUrl && (
+                                        <button
+                                            onClick={() => {
+                                                tg.openTelegramLink(candidate.chatUrl);
+                                            }}
+                                            className="flex-1 py-4 rounded-xl bg-white border border-white/10 text-[var(--tg-theme-text-color)] font-semibold hover:bg-gray-50 transition-all duration-300 active:scale-95 shadow-sm"
+                                        >
+                                            💬 Чат
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* Timeline */}
+                                <div className="mb-6">
+                                    <h3 className="font-bold text-xl tracking-tight mb-6 text-[var(--tg-theme-text-color)]">Комментарии</h3>
+                                    <div className="space-y-4">
+                                        {sortedComments.map((comment, idx) => (
+                                            <div key={idx} className="border-l-4 border-[#007AFF] pl-5 pb-5 bg-white/50 rounded-r-xl p-4 shadow-sm">
+                                                <p className="text-[var(--tg-theme-text-color)] mb-2 leading-relaxed">{comment.text}</p>
+                                                <span className="text-xs text-slate-400 font-medium">
+                                                    {new Date(comment.date).toLocaleString('ru-RU')}
+                                                </span>
+                                            </div>
+                                        ))}
+                                        {sortedComments.length === 0 && (
+                                            <div className="text-center py-12">
+                                                <p className="text-slate-400 text-sm">Нет комментариев</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Add comment */}
+                                <div className="sticky bottom-0 glass-bottom pt-4 pb-4 safe-area-bottom border-t border-white/10">
+                                    <div className="flex gap-3 px-4">
+                                        <input
+                                            type="text"
+                                            value={newComment}
+                                            onChange={(e) => setNewComment(e.target.value)}
+                                            onKeyPress={(e) => e.key === 'Enter' && handleAddComment()}
+                                            placeholder="Добавить комментарий..."
+                                            className="flex-1 p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                        />
+                                        <button
+                                            onClick={handleAddComment}
+                                            className="px-6 py-4 rounded-xl bg-[#007AFF] text-white font-semibold hover:bg-[#0051D5] transition-all duration-300 active:scale-95 shadow-sm"
+                                        >
+                                            ➤
+                                        </button>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // Компонент формы добавления кандидата
+        function AddCandidateForm({ initialData, onSave, onCancel }) {
+            const [formData, setFormData] = useState({
+                name: initialData?.name || '',
+                category: initialData?.category || '',
+                chatUrl: initialData?.chatUrl || '',
+                resumeUrl: initialData?.resumeUrl || '',
+                initialComment: initialData?.initialComment || '',
+                tags: initialData?.tags || ''
+            });
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!formData.name.trim() || !formData.category.trim()) {
+                    tg.showAlert('Заполните имя и категорию');
+                    return;
+                }
+
+                const candidate = {
+                    id: Date.now().toString(),
+                    name: formData.name.trim(),
+                    category: formData.category.trim(),
+                    chatUrl: formData.chatUrl.trim() || null,
+                    resumeUrl: formData.resumeUrl.trim() || null,
+                    tags: formData.tags.split(',').map(t => t.trim()).filter(t => t),
+                    comments: formData.initialComment.trim() 
+                        ? [{ text: formData.initialComment.trim(), date: new Date().toISOString() }]
+                        : []
+                };
+
+                onSave(candidate);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-[#F9FAFB] z-50 flex flex-col safe-area-top safe-area-bottom">
+                    <div className="glass-header flex items-center justify-between p-5 border-b border-white/10">
+                        <button
+                            onClick={onCancel}
+                            className="text-[#007AFF] font-semibold text-base"
+                        >
+                            Отмена
+                        </button>
+                        <h2 className="font-bold text-lg tracking-tight">Новый кандидат</h2>
+                        <div className="w-16"></div>
+                    </div>
+
+                    <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-5 bg-[#F9FAFB]">
+                        <div>
+                            <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Имя *</label>
+                            <input
+                                type="text"
+                                required
+                                value={formData.name}
+                                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                                className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                placeholder="Иван Иванов"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Категория *</label>
+                            <input
+                                type="text"
+                                required
+                                value={formData.category}
+                                onChange={(e) => setFormData({...formData, category: e.target.value})}
+                                className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                placeholder="Python"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Ссылка на чат</label>
+                            <input
+                                type="text"
+                                value={formData.chatUrl}
+                                onChange={(e) => setFormData({...formData, chatUrl: e.target.value})}
+                                className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                placeholder="tg://user?id=123456789"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Ссылка на резюме</label>
+                            <input
+                                type="text"
+                                value={formData.resumeUrl}
+                                onChange={(e) => setFormData({...formData, resumeUrl: e.target.value})}
+                                className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                placeholder="https://..."
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Теги (через запятую)</label>
+                            <input
+                                type="text"
+                                value={formData.tags}
+                                onChange={(e) => setFormData({...formData, tags: e.target.value})}
+                                className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                                placeholder="senior, remote, backend"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-semibold mb-2 text-[var(--tg-theme-text-color)]">Первый комментарий</label>
+                            <textarea
+                                value={formData.initialComment}
+                                onChange={(e) => setFormData({...formData, initialComment: e.target.value})}
+                                className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300 resize-none"
+                                rows="4"
+                                placeholder="Заметки о кандидате..."
+                            />
+                        </div>
+
+                        <button
+                            type="submit"
+                            className="w-full py-4 rounded-xl bg-[#007AFF] text-white font-semibold hover:bg-[#0051D5] transition-all duration-300 active:scale-95 shadow-sm"
+                        >
+                            Сохранить
+                        </button>
+                    </form>
+                </div>
+            );
+        }
+
+        // Главный компонент приложения
+        function App() {
+            const [candidates, setCandidates] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [activeCategory, setActiveCategory] = useState('Все');
+            const [searchQuery, setSearchQuery] = useState('');
+            const [selectedCandidate, setSelectedCandidate] = useState(null);
+            const [showAddForm, setShowAddForm] = useState(false);
+            const [addFormData, setAddFormData] = useState(null);
+
+            // Загрузка данных
+            useEffect(() => {
+                loadData();
+                checkStartParam();
+            }, []);
+
+            const loadData = async () => {
+                setLoading(true);
+                const data = await storageUtils.get();
+                const currentUserId = storageUtils.getCurrentUserId();
+                
+                // Фильтрация по user ID
+                const userCandidates = data.candidates.filter(c => c.userId === currentUserId);
+                setCandidates(userCandidates);
+                setLoading(false);
+            };
+
+            // Проверка start_param для автоматического добавления
+            const checkStartParam = () => {
+                const startParam = tg.initDataUnsafe?.start_param;
+                if (startParam) {
+                    try {
+                        const params = JSON.parse(decodeURIComponent(startParam));
+                        setAddFormData({
+                            name: params.name || '',
+                            category: params.category || '',
+                            chatUrl: params.chatUrl || '',
+                            resumeUrl: params.resumeUrl || '',
+                            initialComment: params.text || '',
+                            tags: params.tags || ''
+                        });
+                        setShowAddForm(true);
+                    } catch (e) {
+                        console.log('No valid start_param');
+                    }
+                }
+            };
+
+            const saveCandidates = async (newCandidates) => {
+                const data = await storageUtils.get();
+                const currentUserId = storageUtils.getCurrentUserId();
+                
+                // Сохраняем только кандидатов текущего пользователя
+                const otherUsersCandidates = data.candidates.filter(c => c.userId !== currentUserId);
+                const updatedData = {
+                    ...data,
+                    candidates: [...otherUsersCandidates, ...newCandidates.map(c => ({...c, userId: currentUserId}))]
+                };
+                
+                await storageUtils.set(updatedData);
+                setCandidates(newCandidates);
+            };
+
+            const handleAddCandidate = async (candidate) => {
+                const currentUserId = storageUtils.getCurrentUserId();
+                const newCandidates = [...candidates, {...candidate, userId: currentUserId}];
+                await saveCandidates(newCandidates);
+                setShowAddForm(false);
+                setAddFormData(null);
+                tg.HapticFeedback.notificationOccurred('success');
+            };
+
+            const handleUpdateCandidate = async (updatedCandidate) => {
+                const newCandidates = candidates.map(c => 
+                    c.id === updatedCandidate.id ? updatedCandidate : c
+                );
+                await saveCandidates(newCandidates);
+                setSelectedCandidate(updatedCandidate);
+                tg.HapticFeedback.notificationOccurred('success');
+            };
+
+            const handleDeleteCandidate = async (candidateId) => {
+                const newCandidates = candidates.filter(c => c.id !== candidateId);
+                await saveCandidates(newCandidates);
+                tg.HapticFeedback.notificationOccurred('success');
+            };
+
+            // Получение уникальных категорий
+            const categories = useMemo(() => {
+                const cats = ['Все', ...new Set(candidates.map(c => c.category))];
+                return cats.filter(Boolean);
+            }, [candidates]);
+
+            // Фильтрация кандидатов
+            const filteredCandidates = useMemo(() => {
+                let filtered = candidates;
+
+                // По категории
+                if (activeCategory !== 'Все') {
+                    filtered = filtered.filter(c => c.category === activeCategory);
+                }
+
+                // По поисковому запросу
+                if (searchQuery.trim()) {
+                    const query = searchQuery.toLowerCase();
+                    filtered = filtered.filter(c => 
+                        c.name.toLowerCase().includes(query) ||
+                        (c.comments && c.comments.some(com => com.text.toLowerCase().includes(query))) ||
+                        (c.tags && c.tags.some(tag => tag.toLowerCase().includes(query)))
+                    );
+                }
+
+                return filtered;
+            }, [candidates, activeCategory, searchQuery]);
+
+            // Экспорт в CSV
+            const exportToCSV = () => {
+                const headers = ['Имя', 'Категория', 'Ссылка на чат', 'Комментарии', 'Ссылка на резюме', 'Теги'];
+                const rows = candidates.map(c => [
+                    c.name,
+                    c.category,
+                    c.chatUrl || '',
+                    (c.comments || []).map(com => com.text).join(' | '),
+                    c.resumeUrl || '',
+                    (c.tags || []).join(', ')
+                ]);
+
+                const csvContent = [
+                    headers.join(','),
+                    ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+                ].join('\n');
+
+                const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `recruiter_crm_${new Date().toISOString().split('T')[0]}.csv`;
+                link.click();
+                tg.HapticFeedback.notificationOccurred('success');
+            };
+
+            if (loading) {
+                return (
+                    <div className="flex items-center justify-center h-screen">
+                        <div className="text-[var(--tg-theme-hint-color)]">Загрузка...</div>
+                    </div>
+                );
+            }
+
+            if (showAddForm) {
+                return (
+                    <AddCandidateForm
+                        initialData={addFormData}
+                        onSave={handleAddCandidate}
+                        onCancel={() => {
+                            setShowAddForm(false);
+                            setAddFormData(null);
+                        }}
+                    />
+                );
+            }
+
+            if (selectedCandidate) {
+                return (
+                    <CandidateDetail
+                        candidate={selectedCandidate}
+                        onClose={() => setSelectedCandidate(null)}
+                        onUpdate={handleUpdateCandidate}
+                        onDelete={handleDeleteCandidate}
+                    />
+                );
+            }
+
+            return (
+                <div className="flex flex-col h-screen safe-area-top safe-area-bottom bg-[#F9FAFB]">
+                    {/* Header with Glassmorphism */}
+                    <div className="glass-header sticky top-0 z-20 flex items-center justify-between p-5 border-b border-white/10">
+                        <h1 className="text-2xl font-bold tracking-tight text-[var(--tg-theme-text-color)]">Кандидаты</h1>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={exportToCSV}
+                                className="px-4 py-2.5 rounded-xl bg-white/60 backdrop-blur-sm border border-white/20 text-sm font-semibold hover:bg-white/80 transition-all duration-300 active:scale-95 shadow-sm"
+                            >
+                                📥
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setAddFormData(null);
+                                    setShowAddForm(true);
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-[#007AFF] text-white text-sm font-semibold hover:bg-[#0051D5] transition-all duration-300 active:scale-95 shadow-sm"
+                            >
+                                +
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Search */}
+                    <div className="p-4">
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="Поиск по именам и комментариям..."
+                            className="w-full p-4 rounded-xl bg-white border border-white/10 shadow-sm text-[var(--tg-theme-text-color)] placeholder:text-slate-400 focus:shadow-md transition-all duration-300"
+                        />
+                    </div>
+
+                    {/* Tabs */}
+                    <CategoryTabs
+                        categories={categories}
+                        activeCategory={activeCategory}
+                        onCategoryChange={setActiveCategory}
+                    />
+
+                    {/* Candidates List */}
+                    <div className="flex-1 overflow-y-auto p-4">
+                        {filteredCandidates.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-20 px-4">
+                                <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#007AFF]/10 to-[#007AFF]/5 flex items-center justify-center mb-6">
+                                    <svg className="w-12 h-12 text-[#007AFF]/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                    </svg>
+                                </div>
+                                <h2 className="text-xl font-bold tracking-tight text-[var(--tg-theme-text-color)] mb-2">
+                                    {searchQuery ? 'Ничего не найдено' : 'Здесь будет ваш топ талантов'}
+                                </h2>
+                                <p className="text-sm text-slate-500 text-center mb-8 max-w-sm">
+                                    {searchQuery ? 'Попробуйте изменить параметры поиска' : 'Начните добавлять кандидатов, чтобы увидеть их здесь'}
+                                </p>
+                                <button
+                                    onClick={() => {
+                                        setAddFormData(null);
+                                        setShowAddForm(true);
+                                    }}
+                                    className="px-8 py-4 rounded-xl bg-[#007AFF] text-white font-semibold hover:bg-[#0051D5] transition-all duration-300 active:scale-95 shadow-sm"
+                                >
+                                    Добавить первого кандидата
+                                </button>
+                            </div>
+                        ) : (
+                            filteredCandidates.map(candidate => (
+                                <CandidateCard
+                                    key={candidate.id}
+                                    candidate={candidate}
+                                    onClick={() => setSelectedCandidate(candidate)}
+                                />
+                            ))
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // Рендеринг приложения
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
