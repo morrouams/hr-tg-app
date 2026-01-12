@@ -195,30 +195,87 @@
             }
         };
 
-        // Утилита для работы с CloudStorage
+        // Утилита для работы с CloudStorage с fallback на localStorage
         const storageUtils = {
-            async get() {
-                try {
-                    const result = await tg.CloudStorage.getItem(STORAGE_KEY);
-                    return result ? JSON.parse(result) : { candidates: [], userId: tg.initDataUnsafe?.user?.id || null };
-                } catch (error) {
-                    console.error('Error reading storage:', error);
-                    return { candidates: [], userId: tg.initDataUnsafe?.user?.id || null };
-                }
+            // Проверка доступности CloudStorage
+            isCloudStorageAvailable() {
+                return tg && tg.CloudStorage && typeof tg.CloudStorage.getItem === 'function';
             },
 
-            async set(data) {
-                try {
-                    await tg.CloudStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-                    return true;
-                } catch (error) {
-                    console.error('Error writing storage:', error);
-                    return false;
+            // Чтение данных (приоритет CloudStorage, fallback localStorage)
+            async get() {
+                const defaultData = { candidates: [], userId: this.getCurrentUserId() };
+                
+                // Пробуем CloudStorage
+                if (this.isCloudStorageAvailable()) {
+                    try {
+                        const result = await tg.CloudStorage.getItem(STORAGE_KEY);
+                        if (result) {
+                            const parsed = JSON.parse(result);
+                            // Также сохраняем в localStorage как резервную копию
+                            try {
+                                localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+                            } catch (e) {
+                                console.warn('Could not save to localStorage backup:', e);
+                            }
+                            return parsed;
+                        }
+                    } catch (error) {
+                        console.error('Error reading CloudStorage:', error);
+                    }
                 }
+                
+                // Fallback: читаем из localStorage
+                try {
+                    const localData = localStorage.getItem(STORAGE_KEY);
+                    if (localData) {
+                        const parsed = JSON.parse(localData);
+                        return parsed;
+                    }
+                } catch (error) {
+                    console.error('Error reading localStorage:', error);
+                }
+                
+                return defaultData;
+            },
+
+            // Сохранение данных (приоритет CloudStorage, fallback localStorage)
+            async set(data) {
+                const dataString = JSON.stringify(data);
+                let saved = false;
+                
+                // Пробуем сохранить в CloudStorage
+                if (this.isCloudStorageAvailable()) {
+                    try {
+                        await tg.CloudStorage.setItem(STORAGE_KEY, dataString);
+                        saved = true;
+                    } catch (error) {
+                        console.error('Error writing CloudStorage:', error);
+                    }
+                }
+                
+                // Всегда сохраняем в localStorage как резервную копию
+                try {
+                    localStorage.setItem(STORAGE_KEY, dataString);
+                    if (!saved) {
+                        saved = true; // Если CloudStorage недоступен, считаем успехом сохранение в localStorage
+                    }
+                } catch (error) {
+                    console.error('Error writing localStorage:', error);
+                    if (!saved) {
+                        return false;
+                    }
+                }
+                
+                return saved;
             },
 
             getCurrentUserId() {
-                return tg.initDataUnsafe?.user?.id || null;
+                // Если в браузере (без Telegram), используем 'browser' как идентификатор
+                if (!tg || !tg.initDataUnsafe || !tg.initDataUnsafe.user) {
+                    return 'browser';
+                }
+                return tg.initDataUnsafe.user.id || 'browser';
             }
         };
 
@@ -648,13 +705,28 @@
 
             const loadData = async () => {
                 setLoading(true);
-                const data = await storageUtils.get();
-                const currentUserId = storageUtils.getCurrentUserId();
-                
-                // Фильтрация по user ID
-                const userCandidates = data.candidates.filter(c => c.userId === currentUserId);
-                setCandidates(userCandidates);
-                setLoading(false);
+                try {
+                    const data = await storageUtils.get();
+                    const currentUserId = storageUtils.getCurrentUserId();
+                    
+                    // Проверяем, что data имеет правильную структуру
+                    if (!data || !Array.isArray(data.candidates)) {
+                        console.warn('Invalid data structure, initializing empty');
+                        setCandidates([]);
+                        setLoading(false);
+                        return;
+                    }
+                    
+                    // Фильтруем по user ID
+                    const userCandidates = data.candidates.filter(c => c && c.userId === currentUserId);
+                    
+                    setCandidates(userCandidates);
+                } catch (error) {
+                    console.error('Error loading data:', error);
+                    setCandidates([]);
+                } finally {
+                    setLoading(false);
+                }
             };
 
             // Проверка start_param для автоматического добавления
@@ -679,18 +751,41 @@
             };
 
             const saveCandidates = async (newCandidates) => {
-                const data = await storageUtils.get();
-                const currentUserId = storageUtils.getCurrentUserId();
-                
-                // Сохраняем только кандидатов текущего пользователя
-                const otherUsersCandidates = data.candidates.filter(c => c.userId !== currentUserId);
-                const updatedData = {
-                    ...data,
-                    candidates: [...otherUsersCandidates, ...newCandidates.map(c => ({...c, userId: currentUserId}))]
-                };
-                
-                await storageUtils.set(updatedData);
-                setCandidates(newCandidates);
+                try {
+                    const currentUserId = storageUtils.getCurrentUserId();
+                    
+                    // Убеждаемся, что у всех кандидатов есть userId
+                    const candidatesWithUserId = newCandidates.map(c => ({
+                        ...c,
+                        userId: c.userId || currentUserId
+                    }));
+                    
+                    const data = await storageUtils.get();
+                    const currentUserIdForFilter = storageUtils.getCurrentUserId();
+                    
+                    // Проверяем структуру данных
+                    if (!data || !Array.isArray(data.candidates)) {
+                        // Если структура неверная, создаем новую
+                        const newData = {
+                            candidates: candidatesWithUserId,
+                            userId: currentUserIdForFilter
+                        };
+                        await storageUtils.set(newData);
+                    } else {
+                        // Сохраняем только кандидатов текущего пользователя
+                        const otherUsersCandidates = data.candidates.filter(c => c && c.userId !== currentUserIdForFilter);
+                        const updatedData = {
+                            ...data,
+                            candidates: [...otherUsersCandidates, ...candidatesWithUserId]
+                        };
+                        await storageUtils.set(updatedData);
+                    }
+                    
+                    setCandidates(newCandidates);
+                } catch (error) {
+                    console.error('Error saving candidates:', error);
+                    tg.showAlert('Ошибка при сохранении данных');
+                }
             };
 
             const handleAddCandidate = async (candidate) => {
